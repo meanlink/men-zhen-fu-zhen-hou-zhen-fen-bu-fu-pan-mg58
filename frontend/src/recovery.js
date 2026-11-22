@@ -1,6 +1,6 @@
 const recoveryLabels = {
   pending: ['待科室分流', 'orange'], prioritized: ['待登记叫号', 'blue'],
-  dismissed: ['已解除', 'gray'], recovered: ['处置已完成', 'green'],
+  dismissed: ['已解除', 'gray'], diverted: ['已分流他科', 'blue'], recovered: ['处置已完成', 'green'],
 };
 
 export function recoveryViews({ state, api, shell, esc, fmtDate, operationForm, toast }) {
@@ -16,8 +16,9 @@ export function recoveryViews({ state, api, shell, esc, fmtDate, operationForm, 
     const release = row.release_id ? `<a class="operations-inline-link" href="#capacity/${row.release_id}">加号批次 #${row.release_id}</a>` : '';
     let actions = '';
     if (canDecide) actions = `<button class="btn btn-primary" data-recovery="prioritized" data-id="${row.id}">安排优先叫号</button>
+      <button class="btn btn-primary" data-divert="${row.id}">分流到别科</button>
       <button class="btn btn-secondary" data-recovery="dismissed" data-id="${row.id}">解除处置</button>`;
-    if (row.status === 'prioritized' && mayOpen()) actions = `<a class="btn btn-primary" href="#samples/${row.sample_id}">前往样本叫号</a>`;
+    if (['prioritized', 'diverted'].includes(row.status) && mayOpen()) actions = `<a class="btn btn-primary" href="#samples/${row.sample_id}">前往样本叫号</a>`;
     return `<tr><td><a class="operations-inline-link" href="#samples/${row.sample_id}"><b>${esc(sample?.sample_code)}</b></a>
       <div class="muted">${esc(slot?.department_name)} · ${esc(slot?.slot_label)}</div>${release}</td>
       <td><b>${row.observed_wait_minutes} 分钟</b><div class="muted">阈值 ${row.threshold_minutes} 分钟 · ${fmtDate(row.observed_at)}</div></td>
@@ -65,9 +66,23 @@ export function recoveryViews({ state, api, shell, esc, fmtDate, operationForm, 
     }
   }
 
+  function divert(id) {
+    const row = state.recoveries.find(item => item.id === id);
+    const sample = state.samples.find(item => item.id === row.sample_id);
+    const origin = slotFor(sample?.department_slot_id);
+    const options = state.slots.filter(slot => slot.id !== sample?.department_slot_id && slot.status === 'open')
+      .map(slot => `<option value="${slot.id}">${esc(slot.department_name)} · ${esc(slot.slot_label)} · ${slot.slot_date}</option>`).join('');
+    if (!options) return toast('暂无其他开放的接诊时段');
+    operationForm('分流到别科接诊', `<p class="operations-form-summary full">样本 ${esc(sample?.sample_code)} 当前属 ${esc(origin?.department_name)}，分流后沿用原签到叫号，统计改计入接诊科。</p>
+      <label class="form-field full">实际接诊时段<select name="admitted_slot_id">${options}</select></label>
+      <label class="form-field full">分流意见<textarea name="note" rows="3" minlength="4" maxlength="500" required></textarea></label>`,
+    { label: '确认分流', endpoint: `/queue-recoveries/${id}/diversion`, payload: data => ({ ...data, admitted_slot_id: Number(data.admitted_slot_id) }) });
+  }
+
   function attachEvents() {
     const open = document.getElementById('open-recovery');
     if (open) open.onclick = () => openTicket(open);
+    document.querySelectorAll('[data-divert]').forEach(button => button.onclick = () => divert(Number(button.dataset.divert)));
     document.querySelectorAll('[data-recovery]').forEach(button => button.onclick = () => {
       const title = button.textContent;
       const decision = button.dataset.recovery;

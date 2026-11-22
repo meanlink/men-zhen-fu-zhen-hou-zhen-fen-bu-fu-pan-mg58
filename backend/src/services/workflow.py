@@ -1,18 +1,15 @@
 from datetime import datetime
-import json
-import secrets
 
 from fastapi import HTTPException
-from sqlalchemy import and_, select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from ..models import (
-    AttendanceException, AttendanceStatus, DepartmentSlot, ReportAttendanceExclusion,
-    ReportStatus, ReviewReport, SampleStatus, User, WaitSample,
-)
-from .analytics import calculate_review
+from ..diversion_models import DiversionOutcome
+from ..models import DepartmentSlot, ReportStatus, ReviewReport, SampleStatus, User, WaitSample
 from .attendance import ensure_no_attendance_hold
+from .diversion import autopublish_for_sample
 from .recovery import capture_recovery_call
+from .reporting import create_report  # noqa: F401  (re-exported for routes)
 
 
 def record_sample_event(db: Session, sample: WaitSample, event: str, event_time: datetime, user: User, note: str | None = None):
@@ -45,44 +42,10 @@ def record_sample_event(db: Session, sample: WaitSample, event: str, event_time:
         sample.note = note
     db.commit()
     db.refresh(sample)
+    if event == "call":
+        # 分流样本叫号后候诊记录完整，若两科均已归档可重算发布。
+        autopublish_for_sample(db, sample.id, user)
     return sample
-
-
-def create_report(db: Session, slot_id: int, title: str, user: User):
-    slot = db.get(DepartmentSlot, slot_id)
-    if not slot:
-        raise HTTPException(status_code=404, detail="科室时段不存在")
-    # Read samples and approved exclusions in one SQL snapshot.
-    rows = db.execute(select(WaitSample, AttendanceException).outerjoin(
-        AttendanceException,
-        and_(AttendanceException.sample_id == WaitSample.id, AttendanceException.status == AttendanceStatus.CONFIRMED),
-    ).where(WaitSample.department_slot_id == slot_id).order_by(WaitSample.appointment_time)).all()
-    result = calculate_review([sample for sample, attendance in rows if attendance is None], slot)
-    report = ReviewReport(
-        report_code=f"RPT-{slot.slot_date.strftime('%m%d')}-{secrets.token_hex(2).upper()}",
-        title=title,
-        department_slot_id=slot_id,
-        status=ReportStatus.UNDER_REVIEW,
-        sample_count=result["sample_count"],
-        missing_checkin_count=result["missing_checkin_count"],
-        p50_minutes=result["p50_minutes"],
-        p90_minutes=result["p90_minutes"],
-        median_minutes=result["median_minutes"],
-        mad_minutes=result["mad_minutes"],
-        anomaly_count=result["anomaly_count"],
-        distribution_json=json.dumps(result["distribution"], ensure_ascii=False),
-        anomaly_codes_json=json.dumps(result["anomaly_codes"], ensure_ascii=False),
-        summary=result["summary"],
-        created_by=user.id,
-    )
-    report.exclusions = [
-        ReportAttendanceExclusion(attendance_id=attendance.id, sample_code=sample.sample_code, reason=attendance.reason)
-        for sample, attendance in rows if attendance is not None
-    ]
-    db.add(report)
-    db.commit()
-    db.refresh(report)
-    return report
 
 
 def review_report(db: Session, report: ReviewReport, user: User, note: str):
@@ -104,6 +67,14 @@ def archive_report(db: Session, report: ReviewReport, user: User):
         raise HTTPException(status_code=409, detail="报告需完成科室复核后才能归档")
     if report.missing_checkin_count > 0:
         raise HTTPException(status_code=409, detail="存在缺失签到时间的样本，禁止发布")
+    # Lock the slot so archival serializes against diversion confirmation.
+    slot = db.get(DepartmentSlot, report.department_slot_id, with_for_update=True, populate_existing=True)
+    stale = db.scalar(select(DiversionOutcome.id).where(
+        or_(DiversionOutcome.origin_slot_id == slot.id, DiversionOutcome.admitted_slot_id == slot.id),
+        DiversionOutcome.confirmed_at > report.created_at,
+    ).limit(1))
+    if stale is not None:
+        raise HTTPException(status_code=409, detail="该时段分布已因分流转归确认而过时，请重新生成报告后再归档")
     report.status = ReportStatus.ARCHIVED
     report.archived_at = datetime.utcnow()
     db.commit()

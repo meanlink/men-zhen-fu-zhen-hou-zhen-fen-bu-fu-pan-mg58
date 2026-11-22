@@ -83,6 +83,9 @@ def main():
         if "--with-operations" in sys.argv[1:]:
             from seed_operations import seed_operations
             seed_operations(db, admin)
+        if "--with-diversion" in sys.argv[1:]:
+            from seed_diversion import seed_diversion
+            seed_diversion(db, analyst, reviewer, admin)
     finally:
         db.close()
 

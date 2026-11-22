@@ -4,6 +4,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, NaiveDatetime, StringConstraints
 
 from .capacity_models import ReleaseStatus
+from .diversion_models import DiversionStatus
 from .recovery_models import RecoveryStatus
 from .schemas import Evidence, SampleOut
 
@@ -85,3 +86,25 @@ class RecoveryOut(RecoveryCreate):
 
 class RecoveryCandidate(SampleOut):
     threshold_minutes: int
+
+
+class DiversionCreate(BaseModel):
+    admitted_slot_id: int
+    note: Evidence
+
+
+class DiversionOut(DiversionCreate):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    recovery_id: int
+    sample_id: int
+    origin_slot_id: int
+    status: DiversionStatus
+    confirmed_by: int
+    confirmed_at: datetime
+    prev_origin_report_id: int | None
+    prev_admitted_report_id: int | None
+    origin_report_id: int | None
+    admitted_report_id: int | None
+    published_at: datetime | None
+    publish_attempts: int

@@ -17,5 +17,5 @@ def get_db():
 
 
 def init_db():
-    from . import capacity_models, models, recovery_models
+    from . import capacity_models, diversion_models, models, recovery_models
     Base.metadata.create_all(bind=engine)

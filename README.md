@@ -18,6 +18,7 @@
 - 未到诊核销由分析专员发起，另一位复核人员确认或驳回。新报告保留核销排除快照。
 - 候诊改善追踪以报告中的异常样本为依据，记录实施措施并用同窗口的后续 P90 验收。
 - 临时容量按支援窗口审批、发放加号并保留台账。超阈值候诊可进入科室分流，叫号后记录处置耗时。
+- 超时样本可分流到别科接诊：复核员在处置单确认实际接诊时段，样本沿用原签到叫号、候诊仍按原科时间线计算，统计改计入接诊科。两科均已归档时旧报告留档，两份重算报告一起发布；发布失败两科各自保留旧版，重试只生效一次。归档与转归确认并发时，先归档的仍可查，确认后旧分布不能再归档。
 - JWT 三角色权限、审计日志、Redis 限流和 worker 心跳
 
 ## 快速启动
@@ -35,7 +36,7 @@ docker compose exec backend python scripts/seed_demo.py --with-expansion --with-
 | 账号 | 密码 | 角色 | 主要动作 |
 |---|---|---|---|
 | analyst | demo123 | 分析专员 | 维护样本、发起核销、生成报告、立项改善、发放临时加号、登记候诊超时 |
-| reviewer | demo123 | 科室复核员 | 决定核销、复核报告、验收改善、审批加号、确认候诊分流 |
+| reviewer | demo123 | 科室复核员 | 决定核销、复核报告、验收改善、审批加号、确认候诊分流与转归 |
 | admin | demo123 | 运营管理员 | 管理时段、归档报告、登记改善实施、申请和收回加号 |
 
 ## 扩展演示
@@ -58,6 +59,15 @@ docker compose exec backend python scripts/seed_demo.py --with-expansion --with-
 
 临时容量批次记录额外诊室及支援人员对应的号源。预约时间须在批次起止范围内，结束时刻归入下一窗口。旧样本入口继续用于补录已发生的事件，临时加号台账只登记经审批发放的号源。页面使用诊区本地时间，审批和申请审计时间由服务器记录。
 
+## 分流转归演示
+
+1. 用 `docker compose exec backend python scripts/seed_demo.py --with-diversion` 预置：心内科、呼吸内科「周五夜间复诊」均已归档基线报告，心内科样本 `DV-A-09` 已签到未叫号，处置单待分流。
+2. 科室复核员在「候诊处置台」对 `DV-A-09` 选择「分流到别科」，确认实际接诊时段为呼吸内科夜间复诊。样本沿用原签到叫号，候诊仍按原科时间线计算，统计改计入接诊科。
+3. 两科均已归档，系统立即尝试把两份重算报告一起发布；此时 `DV-A-09` 尚未叫号，接诊科重算缺叫号记录，发布失败，两科各自保留旧版归档报告。
+4. 分析专员「前往样本叫号」补录叫号时间后，系统自动重试并只生效一次：两科各多一份已归档重算报告，旧报告留档可查。
+5. 「分流转归」页可查到这条转归记录，以及原科、接诊科更正前后的分布对比；报告库的对应报告会标注「旧分布留档」或「分流重算」。
+6. 若归档与转归确认并发，先归档的报告仍可查；转归确认后，基于旧分布的待归档报告会被拒绝归档，需重新生成。
+
 ## 技术栈
 
 | 层 | 技术 |
@@ -78,10 +88,13 @@ docker compose exec backend python scripts/seed_demo.py --with-expansion --with-
 - `frontend/src/app.js` 页面路由和业务交互
 - `frontend/src/followup.js` 核销与改善页面、样本和报告入口
 - `backend/src/capacity_models.py` 与 `backend/src/recovery_models.py` 加号批次、发放记录和候诊处置
+- `backend/src/diversion_models.py` 与 `backend/src/services/diversion.py` 分流转归、归属更正与两科重算发布
 - `backend/src/operations_schemas.py` 运营工作流输入及回执
 - `backend/src/services/capacity.py` 批次审批、加号发放及收回
 - `backend/src/services/recovery.py` 超时阈值、分流与叫号结果
+- `backend/src/services/reporting.py` 按有效归属统计时段样本并组装报告
 - `frontend/src/capacity.js` 与 `frontend/src/recovery.js` 临时容量台账和候诊处置台
+- `frontend/src/diversion.js` 分流转归复盘页
 - `test-artifacts/gb-1041/min35/` 扩展验收、源码清单和截图
 
 ## 共享枚举出现位置
@@ -93,7 +106,8 @@ docker compose exec backend python scripts/seed_demo.py --with-expansion --with-
 - 核销原因 `no_show / cancelled`、核销状态 `pending / confirmed / rejected`、改善状态 `planned / implemented / evaluated` 出现在 `backend/src/models.py`、`backend/src/schemas.py`、`frontend/src/followup.js`，改善结果 `met / missed` 由后端根据 P90 派生。
 
 - 加号批次 `proposed / approved / rejected / closed` 出现在 `backend/src/capacity_models.py`、`backend/src/operations_schemas.py`、`frontend/src/capacity.js`。
-- 处置状态 `pending / prioritized / dismissed / recovered` 出现在 `backend/src/recovery_models.py`、`backend/src/operations_schemas.py`、`frontend/src/recovery.js`。
+- 处置状态 `pending / prioritized / dismissed / diverted / recovered` 出现在 `backend/src/recovery_models.py`、`backend/src/operations_schemas.py`、`frontend/src/recovery.js`。
+- 转归状态 `confirmed / published / failed` 出现在 `backend/src/diversion_models.py`、`backend/src/operations_schemas.py`、`frontend/src/diversion.js`。
 
 ## 环境变量
 

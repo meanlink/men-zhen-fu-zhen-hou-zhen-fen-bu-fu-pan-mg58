@@ -11,6 +11,7 @@ class RecoveryStatus(str, Enum):
     PENDING = 'pending'
     PRIORITIZED = 'prioritized'
     DISMISSED = 'dismissed'
+    DIVERTED = 'diverted'
     RECOVERED = 'recovered'
 
 
